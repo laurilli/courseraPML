@@ -1,0 +1,112 @@
+Course project submission
+========================================================
+
+
+```{r setup, include=FALSE}
+opts_chunk$set(cache=TRUE)
+``` 
+
+Getting data into Rstudio. details are commented out
+```{r get data}
+# get data
+total <-read.csv("pml-training.csv", na.strings=c("NA",""))
+test <-read.csv("pml-testing.csv")
+library(caret)
+# discard NAs
+totalclean <- total[,complete.cases(t(total))]
+# remove non relevant variables
+totalclean <- totalclean[,-c(1:7)]
+# check classe frequencies in complete dataset
+summary(totalclean$classe)/length(totalclean$classe)
+```
+
+Partition data
+```{r partition}
+set.seed(123)
+inTrain <- createDataPartition(y=totalclean$classe,p=0.75, list=FALSE)
+train <- totalclean[inTrain,]
+valid <- totalclean[-inTrain,]
+```
+
+check that classes are ~ equally represented in the training and validation set
+
+```{r}
+summary(train$classe)/length(train$classe)
+summary(valid$classe)/length(valid$classe)
+```
+
+check for presence of near-zero variance variables
+```{r}
+nzv <- nearZeroVar(train, saveMetrics = TRUE)
+```
+none of the variables are nzv
+check for (and remove) higly correlated descriptors
+```{r}
+descrCor <- cor(train[,-53])
+highlyCorDescr <- findCorrelation(descrCor, cutoff = 0.85)
+trainuncorr <- train[, -highlyCorDescr]
+
+summary(descrCor[upper.tri(descrCor)])
+descrCor2 <- cor(trainuncorr[,-45])
+summary(descrCor2[upper.tri(descrCor2)])
+```
+
+use doMC for parallel processing
+```{r}
+library(doMC)
+registerDoMC(cores = 3)
+```
+
+create train control object and specify 10-fold cross validation
+```{r}
+ctrl1 <- trainControl(method = "cv",
+                      number=10,
+                      verbose = FALSE,
+                      allowParallel = TRUE)
+```
+
+fit random forest to the training dataset
+``` {r rftrain}
+set.seed(10)
+system.time({ rfmodel <- train(classe ~ ., method="rf" ,preProcess=c("center","scale"), trainControl = ctrl1, data=trainuncorr)
+})
+```
+
+fit algorithm on validation set and check the out-of-sample error
+``` {r validpred}
+validuncorr <- valid[, -highlyCorDescr]
+preds <- predict(rfmodel, validuncorr)
+confusionMatrix(preds,validuncorr$classe)
+```
+
+
+get predictions for supplied test set
+first remove same variables as the ones removed in the training (and validation) set
+```{r testprep}
+test <- test[,complete.cases(t(test))]
+test <- test[,-c(1:7)]
+test <- test[, -highlyCorDescr]
+names(trainuncorr)
+names(test)
+```
+check that the only column that differs is the last (outcome)
+```{r}
+setdiff(names(trainuncorr),names(test))
+```
+generate predictions
+```{r}
+predtest <- predict(rfmodel, test)
+```
+generate text files for submission
+``` {r gentest}
+setwd("texts")
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+pml_write_files(predtest)
+```
+
